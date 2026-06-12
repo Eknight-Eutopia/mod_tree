@@ -2,17 +2,16 @@
 set -euo pipefail
 
 declare -A module_map
-declare -A expanded
+declare -A visited
 
 MODULE_DIR=""
 OUTPUT_FILE=""
 
-usage() {
-cat <<EOF
-Usage:
-  $0 [-d module_dir] [-o output_file] <module|module.ko>
-EOF
-exit 1
+# -------------------------
+# 统一模块命名（关键修复）
+# -------------------------
+normalize() {
+    echo "$1" | tr '_' '-'
 }
 
 log() {
@@ -23,41 +22,72 @@ log() {
     fi
 }
 
+usage() {
+cat <<EOF
+Usage:
+  $0 [-d module_dir] [-o output] <module|module.ko>
+EOF
+exit 1
+}
+
+# -------------------------
+# 建索引（关键：统一 name）
+# -------------------------
 build_index() {
     local dir="$1"
 
     while IFS= read -r -d '' ko; do
         local name
         name=$(modinfo -F name "$ko" 2>/dev/null || true)
+
         [[ -z "$name" ]] && continue
+
+        name=$(normalize "$name")
         module_map["$name"]="$ko"
     done < <(find "$dir" -type f -name "*.ko" -print0)
 }
 
+# -------------------------
+# 解析模块 -> ko
+# -------------------------
 resolve() {
     local m="$1"
+
+    # file path
     if [[ -f "$m" ]]; then
         echo "$m"
         return
     fi
+
+    m=$(normalize "$m")
+
     if [[ -n "${module_map[$m]:-}" ]]; then
         echo "${module_map[$m]}"
         return
     fi
+
     echo "$m"
 }
 
-name_of() {
+# -------------------------
+# 获取模块名（统一 display）
+# -------------------------
+module_name() {
     local m="$1"
+
     if [[ -f "$m" ]]; then
-        modinfo -F name "$m" 2>/dev/null || basename "$m"
+        modinfo -F name "$m" 2>/dev/null | tr '_' '-' || basename "$m"
     else
         echo "$m"
     fi
 }
 
+# -------------------------
+# 获取 depends（统一 normalize）
+# -------------------------
 get_deps() {
     local m="$1"
+
     if [[ -f "$m" ]]; then
         modinfo -F depends "$m" 2>/dev/null || true
     else
@@ -69,21 +99,20 @@ get_deps() {
     fi
 }
 
-# =========================
-# 核心：层级严格树展开
-# =========================
+# -------------------------
+# 核心 tree
+# -------------------------
 show_tree() {
-    local mod="$1"
+    local input="$1"
     local prefix="$2"
     local last="$3"
-
     local path="$4"
 
-    local real
-    real=$(resolve "$mod")
+    local mod
+    mod=$(resolve "$input")
 
     local name
-    name=$(name_of "$real")
+    name=$(module_name "$mod")
 
     local branch child_prefix
 
@@ -95,35 +124,39 @@ show_tree() {
         child_prefix="${prefix}│   "
     fi
 
-    # 输出当前节点
     if [[ -z "$prefix" ]]; then
         log "$name"
     else
         log "${prefix}${branch}${name}"
     fi
 
-    # ⭐关键：全局只展开一次
     local key="${path}::${name}"
 
-    if [[ -n "${expanded[$key]:-}" ]]; then
+    # 防循环（路径级）
+    if [[ -n "${visited[$key]:-}" ]]; then
         log "${child_prefix}(*)"
         return
     fi
-    expanded["$key"]=1
+    visited["$key"]=1
 
     local deps
-    deps=$(get_deps "$real")
+    deps=$(get_deps "$mod")
+
     [[ -z "$deps" ]] && return
 
     IFS=',' read -ra arr <<< "$deps"
 
-    # ⭐同级严格去重（只影响当前层）
+    # -------------------------
+    # 同级严格去重（关键）
+    # -------------------------
     declare -A seen
     local children=()
 
     for d in "${arr[@]}"; do
         d=$(echo "$d" | xargs)
         [[ -z "$d" ]] && continue
+
+        d=$(normalize "$d")
 
         if [[ -z "${seen[$d]:-}" ]]; then
             children+=("$d")
@@ -139,9 +172,9 @@ show_tree() {
     done
 }
 
-# =========================
+# -------------------------
 # args
-# =========================
+# -------------------------
 while getopts "d:o:h" opt; do
     case "$opt" in
         d) MODULE_DIR="$OPTARG" ;;
