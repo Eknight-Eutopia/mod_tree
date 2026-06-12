@@ -18,40 +18,57 @@ Examples:
 ```
 ## Example
 ```shell
-❯ ./mod_tree.sh -d ./rootfs/lib/modules/6.12.69-android16-6-maybe-dirty-4k/extra/soc-repo  ./rootfs/msm_kgsl.ko
-msm_kgsl
+msm-kgsl
     ├── socinfo
     │   └── smem
     ├── llcc-qcom
+    │   └── socinfo
+    │       └── smem
     ├── qcom-dcvs
-    ├── governor_msm_adreno_tz
+    │   └── dcvs-fp
+    │       ├── qcom-rpmh
+    │       │   ├── qcom-ipc-logging
+    │       │   │   └── minidump
+    │       │   │       ├── debug-symbol
+    │       │   │       └── smem
+    │       │   └── cmd-db
+    │       └── cmd-db
+    ├── governor-msm-adreno-tz
     │   └── qcom-scm
     ├── qcom-scm
     ├── cmd-db
-    ├── msm_performance
+    ├── msm-performance
     │   ├── qcom-pmu-lib
+    │   │   ├── qcom-scmi-client
+    │   │   └── qcom-llcc-pmu
     │   └── sched-walt
-    ├── qcom_aoss
-    │   └── qcom_ipc_logging
-    │       └── minidump
-    │           ├── debug_symbol
+    │       └── socinfo
     │           └── smem
-    ├── mem_buf_dev
-    │   └── secure_buffer
+    ├── qcom-aoss
+    │   └── qcom-ipc-logging
+    │       └── minidump
+    │           ├── debug-symbol
+    │           └── smem
+    ├── mem-buf-dev
+    │   └── secure-buffer
     │       └── qcom-scm
-    ├── qcom_iommu_util
+    ├── qcom-iommu-util
     │   └── qcom-scm
     ├── clk-qcom
-    ├── secure_buffer
+    │   ├── gdsc-regulator
+    │   │   ├── proxy-consumer
+    │   │   └── debug-regulator
+    │   └── icc-clk
+    ├── secure-buffer
     │   └── qcom-scm
-    ├── mdt_loader
+    ├── mdt-loader
     │   └── qcom-scm
     ├── minidump
-    │   ├── debug_symbol
+    │   ├── debug-symbol
     │   └── smem
-    ├── qcom_va_minidump
+    ├── qcom-va-minidump
     │   └── minidump
-    │       ├── debug_symbol
+    │       ├── debug-symbol
     │       └── smem
     └── coresight
 ```
