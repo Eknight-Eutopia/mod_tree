@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-
 set -euo pipefail
 
-declare -A visited
 declare -A module_map
+declare -A expanded
 
 MODULE_DIR=""
 OUTPUT_FILE=""
@@ -11,23 +10,11 @@ OUTPUT_FILE=""
 usage() {
 cat <<EOF
 Usage:
-    $0 [-d module_dir] [-o output_file] <module|module.ko>
-
-Examples:
-    $0 ext4
-
-    $0 ./msm_kgsl.ko
-
-    $0 -d ./rootfs/lib/modules msm_kgsl
-
-    $0 -d ./rootfs/lib/modules -o result.txt msm_kgsl
+  $0 [-d module_dir] [-o output_file] <module|module.ko>
 EOF
 exit 1
 }
 
-#
-# 输出封装（关键新增）
-#
 log() {
     if [[ -n "${OUTPUT_FILE}" ]]; then
         echo "$*" >> "$OUTPUT_FILE"
@@ -36,80 +23,69 @@ log() {
     fi
 }
 
-#
-# 扫描模块目录
-#
 build_index() {
     local dir="$1"
 
     while IFS= read -r -d '' ko; do
         local name
         name=$(modinfo -F name "$ko" 2>/dev/null || true)
-
         [[ -z "$name" ]] && continue
-
         module_map["$name"]="$ko"
     done < <(find "$dir" -type f -name "*.ko" -print0)
 }
 
-resolve_module() {
-    local mod="$1"
-
-    if [[ -f "$mod" ]]; then
-        echo "$mod"
+resolve() {
+    local m="$1"
+    if [[ -f "$m" ]]; then
+        echo "$m"
         return
     fi
-
-    if [[ -n "${module_map[$mod]:-}" ]]; then
-        echo "${module_map[$mod]}"
+    if [[ -n "${module_map[$m]:-}" ]]; then
+        echo "${module_map[$m]}"
         return
     fi
-
-    echo "$mod"
+    echo "$m"
 }
 
-module_name() {
-    local mod="$1"
-
-    if [[ -f "$mod" ]]; then
-        modinfo -F name "$mod" 2>/dev/null || basename "$mod"
+name_of() {
+    local m="$1"
+    if [[ -f "$m" ]]; then
+        modinfo -F name "$m" 2>/dev/null || basename "$m"
     else
-        echo "$mod"
+        echo "$m"
     fi
 }
 
 get_deps() {
-    local mod="$1"
-
-    if [[ -f "$mod" ]]; then
-        modinfo -F depends "$mod" 2>/dev/null || true
-        return
+    local m="$1"
+    if [[ -f "$m" ]]; then
+        modinfo -F depends "$m" 2>/dev/null || true
+    else
+        if [[ -n "${module_map[$m]:-}" ]]; then
+            modinfo -F depends "${module_map[$m]}" 2>/dev/null || true
+        else
+            modinfo -F depends "$m" 2>/dev/null || true
+        fi
     fi
-
-    if [[ -n "${module_map[$mod]:-}" ]]; then
-        modinfo -F depends "${module_map[$mod]}" 2>/dev/null || true
-        return
-    fi
-
-    modinfo -F depends "$mod" 2>/dev/null || true
 }
 
-#
-# 核心递归
-#
+# =========================
+# 核心：层级严格树展开
+# =========================
 show_tree() {
-    local input="$1"
+    local mod="$1"
     local prefix="$2"
     local last="$3"
 
-    local mod
-    mod=$(resolve_module "$input")
+    local path="$4"
+
+    local real
+    real=$(resolve "$mod")
 
     local name
-    name=$(module_name "$mod")
+    name=$(name_of "$real")
 
-    local branch
-    local child_prefix
+    local branch child_prefix
 
     if [[ "$last" == "1" ]]; then
         branch="└── "
@@ -119,51 +95,53 @@ show_tree() {
         child_prefix="${prefix}│   "
     fi
 
+    # 输出当前节点
     if [[ -z "$prefix" ]]; then
         log "$name"
     else
-        if [[ -n "${visited[$name]:-}" ]]; then
-            log "${prefix}${branch}${name} (*)"
-            return
-        fi
         log "${prefix}${branch}${name}"
     fi
 
-    visited["$name"]=1
+    # ⭐关键：全局只展开一次
+    local key="${path}::${name}"
+
+    if [[ -n "${expanded[$key]:-}" ]]; then
+        log "${child_prefix}(*)"
+        return
+    fi
+    expanded["$key"]=1
 
     local deps
-    deps=$(get_deps "$mod")
-
+    deps=$(get_deps "$real")
     [[ -z "$deps" ]] && return
 
-    IFS=',' read -ra dep_array <<< "$deps"
+    IFS=',' read -ra arr <<< "$deps"
 
+    # ⭐同级严格去重（只影响当前层）
     declare -A seen
-    local filtered=()
+    local children=()
 
-    for dep in "${dep_array[@]}"; do
-        dep=$(echo "$dep" | xargs)
-        [[ -z "$dep" ]] && continue
+    for d in "${arr[@]}"; do
+        d=$(echo "$d" | xargs)
+        [[ -z "$d" ]] && continue
 
-        if [[ -z "${seen[$dep]:-}" ]]; then
-            filtered+=("$dep")
-            seen["$dep"]=1
+        if [[ -z "${seen[$d]:-}" ]]; then
+            children+=("$d")
+            seen["$d"]=1
         fi
     done
 
-    local count=${#filtered[@]}
-    for ((i=0; i<count; i++)); do
-        if [[ $i -eq $((count - 1)) ]]; then
-            show_tree "${filtered[$i]}" "$child_prefix" 1
-        else
-            show_tree "${filtered[$i]}" "$child_prefix" 0
-        fi
+    local i
+    for ((i=0; i<${#children[@]}; i++)); do
+        show_tree "${children[$i]}" "$child_prefix" \
+            $([[ $i -eq $((${#children[@]}-1)) ]] && echo 1 || echo 0) \
+            "${path}::${name}"
     done
 }
 
-#
-# 参数解析
-#
+# =========================
+# args
+# =========================
 while getopts "d:o:h" opt; do
     case "$opt" in
         d) MODULE_DIR="$OPTARG" ;;
@@ -174,30 +152,12 @@ while getopts "d:o:h" opt; do
 done
 
 shift $((OPTIND - 1))
-
 [[ $# -ne 1 ]] && usage
 
 TARGET="$1"
 
-#
-# 初始化输出文件
-#
-if [[ -n "$OUTPUT_FILE" ]]; then
-    : > "$OUTPUT_FILE"
-fi
+[[ -n "$OUTPUT_FILE" ]] && : > "$OUTPUT_FILE"
 
-#
-# 建索引
-#
-if [[ -n "$MODULE_DIR" ]]; then
-    [[ -d "$MODULE_DIR" ]] || {
-        echo "ERROR: module directory not found: $MODULE_DIR" >&2
-        exit 1
-    }
-    build_index "$MODULE_DIR"
-fi
+[[ -n "$MODULE_DIR" ]] && build_index "$MODULE_DIR"
 
-#
-# 输出
-#
-show_tree "$TARGET" "" 1
+show_tree "$TARGET" "" 1 ""
